@@ -1,148 +1,224 @@
-# Paths are defined for my local setup. Adjust them as needed.
+#requires -version 7.0
 
-# Define paths
-$repoPath = "C:\gitrepos\dearingdev.github.io"
-$sourcePath = "C:\gitrepos\blog_tools\dearingdev\posts"
-$destinationPath = "C:\gitrepos\dearingdev.github.io\_posts"
-$imageSourcePath = "C:\gitrepos\blog_tools\dearingdev\images"
-$imageDestinationPath = "C:\gitrepos\dearingdev.github.io\assets\images"
+# Future iterations will utilize the Spectre.Console module for a more interactive experience.
+#using module PwshSpectreConsole
 
-# Check and create destination directories if they don't exist
-foreach ($path in @($destinationPath, $imageDestinationPath)) {
-    if (-not (Test-Path -Path $path)) {
-        New-Item -ItemType Directory -Path $path | Out-Null
+param(
+    [Parameter(Mandatory)]
+    [string]$RepoPath,
+
+    [Parameter(Mandatory)]
+    [string]$VaultPath
+)
+
+function Confirm-Environment {
+    Write-Host "Confirming environment..." -ForegroundColor Cyan
+
+    if (-not (Test-Path "$VaultPath\.obsidian")) {
+        throw "The specified VaultPath does not appear to be an Obsidian vault (missing .obsidian directory)."
+    }
+
+    if (-not (Test-Path "$RepoPath\.git")) {
+        throw "The specified RepoPath does not appear to be a Git repository (missing .git directory)."
+    }
+
+    if (-not (Get-Command jekyll -ErrorAction SilentlyContinue)) {
+        throw "Jekyll is not available in PATH."
+    }
+
+    # Check for "posts" and "img" directories in the vault
+    if (-not (Test-Path "$VaultPath\posts")) {
+        $createPosts = Read-Host "The 'posts' directory is missing in the vault. Do you want to create it? (y/n)"
+        if ($createPosts -match '^[Yy]') {
+            New-Item -ItemType Directory -Path "$VaultPath\posts" | Out-Null
+            Write-Host "'posts' directory created in the vault." -ForegroundColor Green
+        } else {
+            throw "The 'posts' directory is required in the vault."
+        }
+    }
+
+    if (-not (Test-Path "$VaultPath\assets\img")) {
+        $createImages = Read-Host "The 'img' directory is missing in the vault. Do you want to create it? (y/n)"
+        if ($createImages -match '^[Yy]') {
+            New-Item -ItemType Directory -Path "$VaultPath\assets\img" | Out-Null
+            Write-Host "'img' directory created in the vault." -ForegroundColor Green
+        } else {
+            throw "The 'img' directory is required in the vault."
+        }
+    }
+
+    # Check for "_posts" and "assets/img" directories in the repository
+    if (-not (Test-Path "$RepoPath\_posts")) {
+        $createPostsRepo = Read-Host "The '_posts' directory is missing in the repository. This may not be a valid static site repository. Are you sure you want to create the directory? (y/n)"
+        if ($createPostsRepo -match '^[Yy]') {
+            New-Item -ItemType Directory -Path "$RepoPath\_posts" | Out-Null
+            Write-Host "'_posts' directory created in the repository." -ForegroundColor Green
+        } else {
+            throw "The '_posts' directory is required in the repository."
+        }
+    }
+
+    if (-not (Test-Path "$RepoPath\assets\img")) {
+        $createImagesRepo = Read-Host "The 'assets\img' directory is missing in the repository. This may not be a valid static site repository. Do you want to create it? (y/n)"
+        if ($createImagesRepo -match '^[Yy]') {
+            New-Item -ItemType Directory -Path "$RepoPath\assets\img" | Out-Null
+            Write-Host "'assets\img' directory created in the repository." -ForegroundColor Green
+        } else {
+            throw "The 'assets\img' directory is required in the repository."
+        }
     }
 }
 
-# --- Sync Markdown Files ---
+function Copy-ObsidianPosts {
+    Write-Host "Copying posts..." -ForegroundColor Green
 
-# Get list of source and destination markdown files (only filenames)
-$sourceMarkdownFiles = Get-ChildItem -Path $sourcePath -Filter "*.md" | Select-Object -ExpandProperty Name
-$destinationMarkdownFiles = Get-ChildItem -Path $destinationPath -Filter "*.md" | Select-Object -ExpandProperty Name
+    $sourcePosts = Get-ChildItem -Path "$VaultPath/posts" -Filter "*.md"
+    $repoPosts = Get-ChildItem -Path "$RepoPath/_posts" -Filter "*.md"
 
-# Delete markdown files that are no longer in source
-$filesToDelete = $destinationMarkdownFiles | Where-Object { $_ -notin $sourceMarkdownFiles }
-foreach ($file in $filesToDelete) {
-    $fullPath = Join-Path $destinationPath $file
-    Write-Host "Deleting markdown file: $fullPath"
-    Remove-Item -Path $fullPath -Force
-}
+    $repoPostMap = @{}
+    foreach ($post in $repoPosts) {
+        $repoPostMap[$post.Name] = $post
+    }
 
-# Copy or update markdown files
-foreach ($file in $sourceMarkdownFiles) {
-    Copy-Item -Path (Join-Path $sourcePath $file) -Destination $destinationPath -Force
-}
-
-# --- Process Each Markdown File to Handle Images ---
-
-# Track which images are referenced across all posts
-$referencedImages = @{}
-
-Get-ChildItem -Path $destinationPath -Filter "*.md" | ForEach-Object {
-    $markdownFilePath = $_.FullName
-    Write-Host "Processing markdown file: $markdownFilePath"
-
-    # Read markdown content
-    $content = Get-Content -Path $markdownFilePath -Raw
-
-    # Find all image references [[image name]]
-    $imageNames = [regex]::Matches($content, '\[\[(.*?)\]\]').ForEach({ $_.Groups[1].Value })
-
-    if ($imageNames.Count -eq 0) {
-        Write-Host "No image links found in this file."
-    } else {
-        foreach ($imageName in $imageNames) {
-            Write-Host "Image: $imageName"
-
-            # Create new image filename (no spaces)
-            $newImageName = $imageName -replace '\s', ''
-            $sourceImagePath = Join-Path -Path $imageSourcePath -ChildPath $imageName
-            $destinationImagePath = Join-Path -Path $imageDestinationPath -ChildPath $newImageName
-
-            # Keep track of images that should exist
-            $referencedImages[$newImageName] = $true
-
-            # Copy image if needed
-            if (Test-Path -Path $sourceImagePath) {
-                Write-Host "Copying image from $sourceImagePath to $destinationImagePath"
-                Copy-Item -Path $sourceImagePath -Destination $destinationImagePath -Force
-            } else {
-                Write-Host "Image not found at $sourceImagePath"
-                continue
-            }
-
-            # Update the markdown content (only if needed)
-            $content = $content -replace "\[\[$imageName\]\]", "[img](assets/images/$newImageName)"
+    foreach ($post in $sourcePosts) {
+        # Ensure no whitespace in the file name
+        $sanitizedFileName = $post.Name -replace '\s', '-'
+        if ($sanitizedFileName -ne $post.Name) {
+            $newPath = Join-Path -Path $post.DirectoryName -ChildPath $sanitizedFileName
+            Rename-Item -Path $post.FullName -NewName $sanitizedFileName
+            $post = Get-Item -Path $newPath
+            Write-Host "Renamed $($post.Name) to remove whitespace." -ForegroundColor Yellow
         }
 
-        # Save updated markdown content
-        Set-Content -Path $markdownFilePath -Value $content
+        $destinationPost = Join-Path -Path $RepoPath -ChildPath ("_posts/" + $post.Name)
+
+        $isPostInRepo = $repoPostMap.ContainsKey($post.Name)
+        if ($isPostInRepo) {
+            $repoFile = $repoPostMap[$post.Name]
+            $sourceHash = Get-FileHash -Path $post.FullName -Algorithm SHA256
+            $repoHash = Get-FileHash -Path $repoFile.FullName -Algorithm SHA256
+
+            if ($sourceHash.Hash -ne $repoHash.Hash) {
+                Write-Host "Updating $($post.Name) in the repository" -ForegroundColor Green
+                Copy-Item -Path $post.FullName -Destination $destinationPost -Force
+            } else {
+                Write-Host "$($post.Name) is up to date" -ForegroundColor Yellow
+            }
+        } else {
+            Write-Host "Copying new post $($post.Name)" -ForegroundColor Green
+            Copy-Item -Path $post.FullName -Destination $destinationPost -Force
+        }
+    }
+
+    # Check for deleted posts
+    $postsInVault = $sourcePosts | ForEach-Object { $_.Name }
+    foreach ($repoPost in $repoPosts) {
+        if (-not ($postsInVault -contains $repoPost.Name)) {
+            $confirmDelete = Read-Host "Post $($repoPost.Name) is no longer in the vault. Do you want to delete it from the repository? (y/n)"
+            if ($confirmDelete -match '^[Yy]') {
+                Write-Host "Deleting $($repoPost.Name) from repository..." -ForegroundColor Red
+                Remove-Item -Path $repoPost.FullName -Force
+            }
+        }
     }
 }
 
-# --- Clean Up Unused Images ---
+function Copy-ObsidianImages {
+    Write-Host "Copying images used in posts..." -ForegroundColor Green
 
-# Get current images in the destination
-$currentImages = Get-ChildItem -Path $imageDestinationPath | Select-Object -ExpandProperty Name
+    # Get list of images referenced in markdown files
+    $usedImages = Get-ChildItem -Path "$VaultPath\posts" -Filter "*.md" | ForEach-Object {
+        Select-String -Path $_.FullName -Pattern "!\[.*\]\(\.\./assets/img/(.*?)\)" | ForEach-Object {
+            $_.Matches.Groups[1].Value
+        }
+    }
 
-# Find images that are not referenced
-$imagesToDelete = $currentImages | Where-Object { $_ -notin $referencedImages.Keys }
-foreach ($image in $imagesToDelete) {
-    $fullPath = Join-Path $imageDestinationPath $image
-    Write-Host "Deleting unused image: $fullPath"
-    Remove-Item -Path $fullPath -Force
+    foreach ($encodedName in $usedImages) {
+        $decodedName = [uri]::UnescapeDataString($encodedName)
+        $sourceImagePath = Join-Path -Path "$VaultPath\assets\img" -ChildPath $decodedName
+        $destinationImagePath = Join-Path -Path "$RepoPath\assets\img" -ChildPath $encodedName
+
+        if (Test-Path $sourceImagePath) {
+            if (-not (Test-Path $destinationImagePath)) {
+                Write-Host "Copying $encodedName to $destinationImagePath" -ForegroundColor Green
+                Copy-Item -Path $sourceImagePath -Destination $destinationImagePath -Force
+            } else {
+                Write-Host "Image $encodedName already exists in the destination. Skipping copy." -ForegroundColor Yellow
+            }
+        } else {
+            Write-Host "Referenced image $decodedName not found in $VaultPath\assets\img" -ForegroundColor Yellow
+        }
+    }
 }
 
-# --- Build Jekyll Site ---
+function Remove-StaleImages {
+    Write-Host "Removing stale images..." -ForegroundColor Yellow
 
-Write-Host "Building Jekyll site..."
+    # Get list of images in the repo
+    $repoImages = Get-ChildItem -Path "$RepoPath\assets\img" -Filter "*.png"
+    
+    # Get list of images used in posts
+    $usedImages = Get-ChildItem -Path "$RepoPath\_posts" -Filter "*.md" | ForEach-Object {
+        Select-String -Path $_.FullName -Pattern "!\[.*\]\(\.\./assets/img/(.*?)\)" | ForEach-Object {
+            $_.Matches.Groups[1].Value
+        }
+    }
 
-Push-Location $repoPath
+    # Remove stale images
+    foreach ($image in $repoImages) {
+        if (-not ($usedImages -contains $image.Name)) {
+            Write-Host "Removing stale image: $($image.Name)" -ForegroundColor Red
+            Remove-Item -Path $image.FullName -Force
+        }
+    }
+}
 
-# Build the site using Jekyll
-$jekyllBuildResult = & bundle exec jekyll build
+function Invoke-GitCommitAndPush {
+    Write-Host "Committing and optionally pushing changes..." -ForegroundColor Cyan
+    Push-Location $RepoPath
+    
+    git add .
 
-if ($LASTEXITCODE -ne 0) {
-    Write-Host "Jekyll build failed. Aborting git actions." -ForegroundColor Red
+    $defaultMessage = "Sync posts and images $(Get-Date -Format 'yyyy-MM-dd HH:mm')"
+    Write-Host "Default commit message: $defaultMessage" -ForegroundColor Yellow
+    $customMessage = Read-Host "Enter a custom commit message or press Enter to use the default"
+    
+    $commitMessage = if ([string]::IsNullOrWhiteSpace($customMessage)) { $defaultMessage } else { $customMessage }
+
+    git commit -m "$commitMessage"
+
+    $pushConfirm = Read-Host "Do you want to push the commit to the remote repository? (y/n)"
+    if ($pushConfirm -match '^[Yy]') {
+        git push
+    }
     Pop-Location
-    exit 1
-} else {
-    Write-Host "Jekyll build succeeded." -ForegroundColor Green
 }
 
-# If the build was successful, you can run bundle exec jekyll serve to preview the site locally
+# MAIN
+Confirm-Environment
 
-# --- Git Actions ---
+$progress = [System.Collections.Generic.List[string]]@(
+    'Copy posts',
+    'Copy images',
+    'Remove stale images',
+    'Commit and push changes'
+)
 
-Write-Host "Staging all changes for git..."
-& git add .
+$progressCount = 0
+$totalSteps = $progress.Count
 
-# Prepare commit message
-$defaultMessage = "Sync posts and images $(Get-Date -Format 'yyyy-MM-dd HH:mm')"
-Write-Host "Default commit message: '$defaultMessage'"
-$customMessage = Read-Host "Enter a custom commit message or press Enter to use the default"
+$progress | ForEach-Object {
+    $progressCount++
+    $percentComplete = ($progressCount / $totalSteps) * 100
+    
+    Write-Progress -Activity "Syncing blog content..." -Status $_ -PercentComplete $percentComplete
 
-if ([string]::IsNullOrWhiteSpace($customMessage)) {
-    $commitMessage = $defaultMessage
-} else {
-    $commitMessage = $customMessage
+    switch ($_) {
+        'Copy posts' { Copy-ObsidianPosts }
+        'Copy images' { Copy-ObsidianImages }
+        'Remove stale images' { Remove-StaleImages }
+        'Commit and push changes' { Invoke-GitCommitAndPush }
+    }
 }
 
-# Commit the changes
-Write-Host "Committing changes..."
-& git commit -m $commitMessage
-
-# Ask if the user wants to push
-$pushConfirm = Read-Host "Do you want to push the commit to the remote repository? (y/n)"
-
-if ($pushConfirm -match '^[Yy]') {
-    Write-Host "Pushing to remote..."
-    & git push
-    Write-Host "Changes pushed successfully."
-} else {
-    Write-Host "Push skipped. You can manually push later with 'git push'."
-}
-
-Pop-Location
-
-Write-Host "Sync, build, git commit (and optional push) completed."
+Write-Host "Sync complete!" -ForegroundColor Green
