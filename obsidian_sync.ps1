@@ -97,7 +97,7 @@ function Copy-ObsidianPosts {
                     $newPath = Join-Path -Path $post.DirectoryName -ChildPath $sanitizedFileName
                     Rename-Item -Path $post.FullName -NewName $sanitizedFileName -ErrorAction Stop
                     $post = Get-Item -Path $newPath -ErrorAction Stop
-                    Write-Host "Renamed $($post.Name) to remove whitespace." -ForegroundColor Yellow
+                    Write-Verbose "Renamed $($post.Name) to remove whitespace." -ForegroundColor Yellow
                 }
 
                 $destinationPost = Join-Path -Path $RepoPath -ChildPath ("_posts/" + $post.Name)
@@ -111,7 +111,7 @@ function Copy-ObsidianPosts {
                         Write-Host "Updating $($post.Name) in the repository" -ForegroundColor Green
                         Copy-Item -Path $post.FullName -Destination $destinationPost -Force -ErrorAction Stop
                     } else {
-                        Write-Host "$($post.Name) is up to date" -ForegroundColor Yellow
+                        Write-Verbose "$($post.Name) is up to date" -ForegroundColor Yellow
                     }
                 } else {
                     Write-Host "Copying new post $($post.Name)" -ForegroundColor Green
@@ -163,7 +163,7 @@ function Copy-ObsidianImages {
                     Write-Host "Copying $encodedName to $destinationImagePath" -ForegroundColor Green
                     Copy-Item -Path $sourceImagePath -Destination $destinationImagePath -Force -ErrorAction Stop
                 } else {
-                    Write-Host "Image $encodedName already exists in the destination. Skipping copy." -ForegroundColor Yellow
+                    Write-Verbose "Image $encodedName already exists in the destination. Skipping copy." -ForegroundColor Yellow
                 }
             } else {
                 Write-Warning "Referenced image $decodedName not found in $VaultPath\assets\img"
